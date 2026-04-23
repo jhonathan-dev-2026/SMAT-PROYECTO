@@ -13,7 +13,6 @@ class LecturaResponse(LecturaBase):
     class Config:
         from_attributes = True
 
-# --- Esquemas para Estaciones ---
 class EstacionBase(BaseModel):
     id: int = Field(..., gt=0, description="ID único de la estación física")
     nombre: str = Field(..., min_length=3, description="Nombre descriptivo de la estación")

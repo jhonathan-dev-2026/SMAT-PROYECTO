@@ -4,41 +4,29 @@ from sqlalchemy.orm import Session
 from typing import List
 from . import models, schemas, crud
 from .database import engine, get_db
+from .auth import crear_token_acceso, obtener_identidad_actual, Token
 
-# Generación de tablas en la base de datos
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="SMAT - Sistema de Monitoreo de Alerta Temprana",
     description="""
-## API Profesional de Monitoreo Ambiental
-### Laboratorio 4.3 - Refactorización, Middleware y Seguridad
+## 🔐 Ecosistema SMAT v2.5 - Seguridad Avanzada JWT
+API Profesional con protección de endpoints y validación de integridad cruzada.
 
-Este ecosistema digital ha sido diseñado bajo estándares de **Clean Code** y **Arquitectura Modular**, asegurando una base de datos sólida y una comunicación segura para clientes externos.
-
-**Funcionalidades Implementadas:**
-* **Modularización:** Estructura basada en módulos especializados (Models, Schemas, CRUD).
-* **Middleware CORS:** Configuración de seguridad para interoperabilidad multiplataforma.
-* **Dashboard de Auditoría:** Reportes ejecutivos dinámicos con funciones SQL avanzadas.
-* **TDD (Test Driven Development):** Validación integral del sistema mediante Pytest.
-
-**Información del Desarrollador:**
-* **Facultad:** Ingeniería de Sistemas e Informática (UNMSM)
-* **Materia:** Desarrollo Basado en Plataformas
+**Seguridad Implementada:**
+* **Autenticación:** JWT (JSON Web Tokens) con algoritmo HS256.
+* **Autorización:** Protección de endpoints de escritura (POST).
+* **Integridad:** Validación de existencia de llaves foráneas antes de inserción.
 """,
-    version="2.0.1",
+    version="2.5.0",
     contact={
-        "name": "Jhonathan Gomez - Soporte SMAT",
+        "name": "Jhonathan Gomez - UNMSM FISI",
         "url": "https://github.com/jhonathan-dev-2026",
         "email": "jhonathan.gomez@unmsm.edu.pe",
-    },
-    license_info={
-        "name": "MIT License",
-        "url": "https://opensource.org/licenses/MIT",
-    },
+    }
 )
 
-# Configuración de Seguridad CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -47,29 +35,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Endpoints de Gestión de Infraestructura ---
+@app.post("/token", response_model=Token, tags=["Seguridad"], summary="Login para obtener Token JWT")
+async def login_para_obtener_token():
+    """Genera un token válido para el administrador del sistema"""
+    return {"access_token": crear_token_acceso({"sub": "admin_smat"}), "token_type": "bearer"}
 
-@app.post("/estaciones/", status_code=201, tags=["Gestión de Infraestructura"], summary="Crear nueva estación")
-def post_estacion(estacion: schemas.EstacionCreate, db: Session = Depends(get_db)):
+
+@app.post("/estaciones/", status_code=201, tags=["Gestión de Infraestructura"], summary="Crear nueva estación (Protegido)")
+def post_estacion(
+    estacion: schemas.EstacionCreate, 
+    db: Session = Depends(get_db),
+    usuario_audit: str = Depends(obtener_identidad_actual)
+):
     if crud.obtener_estacion_por_id(db, estacion.id):
-        raise HTTPException(status_code=400, detail="ID ya registrado")
+        raise HTTPException(status_code=400, detail="ID de estación ya registrado")
     return crud.crear_nueva_estacion(db, estacion)
 
-@app.get("/estaciones/", response_model=List[schemas.EstacionResponse], tags=["Gestión de Infraestructura"], summary="Listar todas las estaciones")
+@app.get("/estaciones/", response_model=List[schemas.EstacionResponse], tags=["Gestión de Infraestructura"])
 def get_estaciones(db: Session = Depends(get_db)):
     return crud.obtener_todas_las_estaciones(db)
 
-# --- Endpoints de Telemetría ---
-
-@app.post("/lecturas/", status_code=201, tags=["Telemetría de Sensores"], summary="Registrar lectura de sensor")
-def post_lectura(lectura: schemas.LecturaCreate, db: Session = Depends(get_db)):
-    if not crud.obtener_estacion_por_id(db, lectura.estacion_id):
-        raise HTTPException(status_code=404, detail="Estación no existe")
+@app.post("/lecturas/", status_code=201, tags=["Telemetría de Sensores"], summary="Registrar lectura (Protegido + Reto Integridad)")
+def post_lectura(
+    lectura: schemas.LecturaCreate, 
+    db: Session = Depends(get_db),
+    usuario_audit: str = Depends(obtener_identidad_actual)
+):
+    estacion_db = crud.obtener_estacion_por_id(db, lectura.estacion_id)
+    if not estacion_db:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"Error de Integridad: La estación con ID {lectura.estacion_id} no existe en la base de datos."
+        )
     return crud.registrar_nueva_lectura(db, lectura)
 
-# --- Endpoints de Reportes y Análisis ---
 
-@app.get("/estaciones/{id}/historial", tags=["Reportes Históricos"], summary="Obtener historial y promedio")
+@app.get("/estaciones/{id}/historial", tags=["Reportes Históricos"])
 def get_historial(id: int, db: Session = Depends(get_db)):
     estacion = crud.obtener_estacion_por_id(db, id)
     if not estacion:
@@ -84,17 +85,15 @@ def get_historial(id: int, db: Session = Depends(get_db)):
         "data": valores
     }
 
-@app.get("/estaciones/{id}/riesgo", tags=["Análisis de Riesgo"], summary="Evaluar nivel de riesgo actual")
+@app.get("/estaciones/{id}/riesgo", tags=["Análisis de Riesgo"])
 def get_riesgo(id: int, db: Session = Depends(get_db)):
     ultima = crud.obtener_ultima_lectura(db, id)
     if not ultima:
-        raise HTTPException(status_code=404, detail="Sin datos registrados para esta estación")
+        raise HTTPException(status_code=404, detail="Sin datos")
     nivel = "PELIGRO" if ultima.valor > 30 else "ALERTA" if ultima.valor >= 15 else "NORMAL"
     return {"id": id, "valor": ultima.valor, "nivel": nivel}
 
-# --- Endpoints de Resumen Ejecutivo (Reto Final) ---
-
-@app.get("/estaciones/stats", tags=["Resumen Ejecutivo"], summary="Dashboard de Auditoría")
+@app.get("/estaciones/stats", tags=["Resumen Ejecutivo"])
 def get_stats(db: Session = Depends(get_db)):
     max_v = crud.obtener_valor_maximo(db)
     return {
